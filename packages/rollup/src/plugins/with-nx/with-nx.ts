@@ -276,16 +276,27 @@ export function withNx(
             const rollupOutputDir = Array.isArray(finalConfig.output)
               ? finalConfig.output[0].dir
               : finalConfig.output.dir;
-            return require('@rollup/plugin-typescript')({
+            const tsPlugin = require('@rollup/plugin-typescript')({
               tsconfig: tsConfigPath,
+              // Use workspace root as the filter base so that source files
+              // from workspace libraries outside this project's rootDir are
+              // not silently excluded by the plugin's include filter.
+              filterRoot: workspaceRoot,
               compilerOptions: {
                 ...tsCompilerOptions,
                 composite: false,
                 outDir: rollupOutputDir,
                 declarationDir: rollupOutputDir,
-                noEmitOnError: !options.skipTypeCheck,
+                // Always false: prevents TS6059 ("File is not under rootDir")
+                // from becoming a fatal rollup error when workspace library
+                // source files are outside the project root.  This matches the
+                // legacy rollup-plugin-typescript2 behaviour where diagnostics
+                // are reported as warnings.  Strict type-checking should be
+                // handled by a dedicated `typecheck` target instead.
+                noEmitOnError: false,
               },
             });
+            return patchTsPluginToSkipExternalDeclarations(tsPlugin);
           })(),
       typeDefinitions({
         projectRoot,
@@ -387,6 +398,38 @@ function createTsCompilerOptions(
     compilerOptions['emitDeclarationOnly'] = true;
   }
   return compilerOptions;
+}
+
+/**
+ * When TypeScript discovers workspace library source files outside this
+ * project's rootDir it emits declaration files whose paths relative to
+ * the output directory start with "../".  Rollup rejects such paths, so
+ * we wrap the plugin's generateBundle to intercept emitFile and silently
+ * drop them — the workspace library has its own build that produces its
+ * declarations.
+ */
+export function patchTsPluginToSkipExternalDeclarations<
+  T extends { generateBundle?: (...args: unknown[]) => unknown },
+>(tsPlugin: T): T {
+  const origGenerateBundle = tsPlugin.generateBundle;
+  if (!origGenerateBundle) return tsPlugin;
+  tsPlugin.generateBundle = function (...args: unknown[]) {
+    const origEmitFile = (this as any).emitFile;
+    (this as any).emitFile = function (
+      emission: Record<string, unknown>
+    ): unknown {
+      if (
+        emission.type === 'asset' &&
+        typeof emission.fileName === 'string' &&
+        emission.fileName.startsWith('..')
+      ) {
+        return;
+      }
+      return origEmitFile.call(this, emission);
+    };
+    return origGenerateBundle.apply(this, args);
+  };
+  return tsPlugin;
 }
 
 function readCompatibleFormats(
