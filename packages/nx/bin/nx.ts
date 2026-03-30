@@ -43,7 +43,8 @@ async function main() {
     process.argv[2] !== 'report' &&
     process.argv[2] !== '--version' &&
     process.argv[2] !== '--help' &&
-    process.argv[2] !== 'reset'
+    process.argv[2] !== 'reset' &&
+    process.argv[2] !== 'completion'
   ) {
     assertSupportedPlatform();
   }
@@ -118,7 +119,9 @@ async function main() {
       if (!daemonClient.enabled() && workspace !== null) {
         setupWorkspaceContext(workspace.dir);
       }
-      await initAnalytics();
+      if (!process.argv.includes('--get-yargs-completions')) {
+        await initAnalytics();
+      }
       await initLocal(workspace);
     } else if (localNx) {
       // Nx is being run from globally installed CLI - hand off to the local
